@@ -1,4 +1,6 @@
 javalang
 pystache
 yara-python
+six==1.12.0
 git+https://github.com/U039b/smalisca.git
+objutils

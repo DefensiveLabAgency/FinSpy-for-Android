@@ -6,6 +6,9 @@
 import binascii
 import string
 import struct
+from io import StringIO
+
+from objutils import Section
 
 tlv_types = {
     4522400: "TlvTypeMobileTrackingStartRequest",
@@ -724,6 +727,21 @@ tlv_types = {
 }
 
 
+def bitwise_and_bytes(a, b):
+    result_int = int.from_bytes(a, byteorder="little") & int.from_bytes(b, byteorder="little")
+    return result_int.to_bytes(max(len(a), len(b)), byteorder="little")
+
+
+def bitwise_or_bytes(a, b):
+    result_int = int.from_bytes(a, byteorder="little") | int.from_bytes(b, byteorder="little")
+    return result_int.to_bytes(max(len(a), len(b)), byteorder="little")
+
+
+def bitwise_xor_bytes(a, b):
+    result_int = int.from_bytes(a, byteorder="little") ^ int.from_bytes(b, byteorder="little")
+    return result_int.to_bytes(max(len(a), len(b)), byteorder="little")
+
+
 def find_config_entry(dex):
     i = 0
     first_marker = 16669584  # TlvTypeMobileEncryption
@@ -734,9 +752,6 @@ def find_config_entry(dex):
         marker_2 = struct.unpack_from('<I', dex, i + 8)[0]
         if marker_1 == first_marker and marker_2 == second_marker:
             conf_length = struct.unpack_from('<I', dex, i + 4)[0]
-            print(f'Configuration found')
-            print(f'\t - length {conf_length} bytes')
-            print(f'\t - position {i}')
             return i, conf_length
         i += 1
     raise Exception('No configuration found')
@@ -748,39 +763,164 @@ def get_tlv_name(tlv):
     return tlv_types.get(tlv)
 
 
+def parse_installed_modules(value):
+    return [
+        {
+            'name': 'Spy calls',
+            'active': (value[64] == 1),
+            'description': 'Record phone calls'
+        },
+        {
+            'name': 'Intercept calls',
+            'active': (value[65] == 1),
+            'description': 'Intercept calls'
+        },
+        {
+            'name': 'SMS',
+            'active': (value[66] == 1),
+            'description': 'Collect SMS'
+        },
+        {
+            'name': 'Address book',
+            'active': (value[67] == 1),
+            'description': 'Collect contacts stored in both SIM and phone memory'
+        },
+        {
+            'name': 'Logging',
+            'active': (value[68] == 1),
+            'description': 'Need investigation'
+        },
+        {
+            'name': 'Location',
+            'active': (value[69] == 1),
+            'description': 'Track location changes'
+        },
+        {
+            'name': 'Call log',
+            'active': (value[70] == 1),
+            'description': 'Collect call log with phone numbers, contact names...'
+        },
+        {
+            'name': 'Calendar',
+            'active': (value[72] == 1),
+            'description': 'Collect calendar events, reminders, notes, attendees, ...'
+        },
+        {
+            'name': 'Spy chats',
+            'active': (value[86] == 1),
+            'description': 'Collect messages, groups, contacts of numerous chat applications.'
+        }
+    ]
+
+
+def parse_heartbeat_events(value):
+    if len(value) != 2:
+        return None
+    return [
+        {
+            'name': 'SIM changed',
+            'active': (int.from_bytes(value, byteorder="little") & 0b10000000) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Cell location changed',
+            'active': (int.from_bytes(value, byteorder="little") & 0b01000000) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Network changed',
+            'active': (int.from_bytes(value, byteorder="little") & 0b00100000) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Call',
+            'active': (int.from_bytes(value, byteorder="little") & 0b00010000) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Wifi connected',
+            'active': (int.from_bytes(value, byteorder="little") & 0b00001000) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Data link available',
+            'active': (int.from_bytes(value, byteorder="little") & 0b00000100) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Network activated',
+            'active': (int.from_bytes(value, byteorder="little") & 0b00000010) > 0,
+            'description': ''
+        },
+        {
+            'name': 'Data available',
+            'active': (int.from_bytes(value, byteorder="little") & 0b00000001) > 0,
+            'description': ''
+        }
+    ]
+
+
 def parse_configuration_entries(dex, offset, length):
+    config = []
     i = offset
     marker = struct.unpack_from('<I', dex, i)[0]
     if marker == 8663968:  # TlvTypeMobileTargetOfflineConfig
         length_to_parse_next = struct.unpack_from('<I', dex, i + 4)[0]
         i += 8
     else:
-        print('Ooops')
-        return
+        return config
 
-    while i-offset < length:
+    while i - offset < length:
         # | TLV 4 bytes | Value x bytes | Length to parse after 4 bytes |
         tlv = struct.unpack_from('<I', dex, i)[0]
         i += 4
         value_length = length_to_parse_next - 8
+        is_value_printable_inline = True
         if value_length == 4:
             value = struct.unpack_from('<I', dex, i)[0]
+            raw_value = value
         else:
             try:
                 value = dex[i:i+value_length].decode('ascii')
+                raw_value = value
                 if not all(c in string.printable for c in value):
                     raise Exception()
             except:
-                value = '\n\t'+'\n\t'.join(binascii.b2a_hex(dex[i:i+value_length], '_', -8).decode('utf-8').split('_'))
-
-        print(f'[{tlv}][{tlv:2x}]{get_tlv_name(tlv)} = {value}')
+                section = Section(i, dex[i:i+value_length])
+                raw_value = dex[i:i+value_length]
+                buf = StringIO()
+                section.hexdump(buf)
+                buf.seek(0)
+                value = buf.read()
+                is_value_printable_inline = False
+        attrs = None
+        if tlv == 8681872:  # TlvTypeInstalledModules
+            attrs = parse_installed_modules(raw_value)
+        if tlv == 8675472:  # TlvTypeMobileTargetHeartbeatEvents
+            attrs = parse_heartbeat_events(raw_value)
+        config.append({
+            'tlv_int': tlv,
+            'tlv_hex': f'{tlv:2x}',
+            'tlv_name': get_tlv_name(tlv),
+            'is_printable_value': is_value_printable_inline,
+            'value': value,
+            'attrs': attrs
+        })
+        # print(f'[{tlv}][{tlv:2x}]{get_tlv_name(tlv)} = {value}')
         i += value_length
+        if i + 4 > len(dex):
+            return config
         length_to_parse_next = struct.unpack_from('<I', dex, i)[0]
         i += 4
+    return config
 
 
 def parse_dex_configuration(dex_path):
     with open(dex_path, 'rb') as dex_file:
         dex = dex_file.read()
         offset, length = find_config_entry(dex)
-        parse_configuration_entries(dex, offset+8, length)
+        return parse_configuration_entries(dex, offset+8, length)
+
+
+# dex = '../../extracted/classes.dex'
+# parse_dex_configuration(dex)
