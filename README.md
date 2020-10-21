@@ -24,6 +24,8 @@ NB: `analyze_samples.py` extracts and parses configuration whether it is stored 
 * enter into the cloned directory: `cd FinSpy-for-Android.git`
 * create a Python 3 virtual env.: `virtualenv -p python3 venv`
 * activate the venv: `source venv/bin/activate`
+* then: `cd python`
+* install dependencies: `pip install -r requirements.txt`
 * play!
 
 ## Configuration parsing
